@@ -1,8 +1,8 @@
-# Panduan Setup Apache, DNS, SSL, dan IP Statis
+# Panduan Setup Apache, DNS, SSL, dan IP Statis di Ubuntu Server VMware
 
 Dokumen ini merupakan README utama proyek sekaligus panduan deployment web statis pada server.
 
-Panduan ini menggunakan **Ubuntu Server/Debian** sebagai web server, **Apache2** sebagai web server, **BIND9** untuk DNS lokal (opsional), **Let's Encrypt/Certbot** untuk SSL publik, dan **Windows 10/11 atau Windows Server** sebagai contoh klien Windows.
+Panduan ini menggunakan **Ubuntu Server di VMware Workstation/Player** sebagai server, **Apache2** sebagai web server, **BIND9** untuk DNS lokal (opsional), **Let's Encrypt/Certbot** untuk SSL publik, dan Windows/Linux pada laptop fisik sebagai host.
 
 > Semua alamat pada panduan adalah contoh. Ganti sesuai jaringan dan domain Anda. Alamat publik `203.0.113.10` memang dicadangkan untuk dokumentasi dan tidak dapat dipakai sebagai alamat server nyata.
 
@@ -10,15 +10,22 @@ Panduan ini menggunakan **Ubuntu Server/Debian** sebagai web server, **Apache2**
 
 | Komponen | Nilai contoh |
 |---|---|
+| Mode jaringan VMware | `Bridged` |
 | Domain publik | `example.com` |
 | Nama host web | `www.example.com` |
 | IP publik router/server | `203.0.113.10` |
 | IP lokal server | `192.168.1.10/24` |
 | Gateway LAN | `192.168.1.1` |
-| Interface Linux | `enp1s0` |
+| Interface Linux VM | `ens33` |
 | DNS lokal opsional | `192.168.1.10` |
 | Zona DNS lokal opsional | `lab.example.com` |
 | Document root Apache | `/var/www/example.com/public_html` |
+
+Alur akses dari laptop host:
+
+```text
+Browser di host -> jaringan Bridged -> 192.168.1.10:80/443 -> Apache di VM
+```
 
 Alur akses publik:
 
@@ -28,15 +35,168 @@ Browser -> DNS publik -> IP publik -> NAT/router -> 192.168.1.10:80/443 -> Apach
 
 Sebelum mulai:
 
-1. Siapkan server Ubuntu/Debian dengan akun yang memiliki akses `sudo`.
+1. Siapkan VM Ubuntu Server dengan akun yang memiliki akses `sudo`.
 2. Pastikan IP statis yang dipilih tidak sedang dipakai perangkat lain dan berada di luar pool DHCP, atau buat DHCP reservation di router.
 3. Miliki domain dan akses ke panel DNS domain tersebut.
 4. Jika server berada di belakang router, siapkan port forwarding TCP `80` dan `443` ke `192.168.1.10`.
 5. Pastikan koneksi ISP memiliki IP publik. Port forwarding biasa tidak bekerja jika koneksi berada di balik CGNAT.
 
-## 2. Konfigurasi IP statis di Linux
+## 2. Konfigurasi jaringan VMware agar VM dapat diakses host
 
-### 2.1 Identifikasi interface dan konfigurasi saat ini
+### 2.1 Pilih mode jaringan
+
+| Mode VMware | Akses dari host | Akses dari perangkat LAN lain | Internet di VM | Penggunaan |
+|---|---:|---:|---:|---|
+| **Bridged** | Ya | Ya | Ya | Direkomendasikan untuk web server LAN/publik |
+| **NAT** | Umumnya ya | Tidak langsung | Ya | Lab yang hanya perlu diakses host |
+| **Host-only** | Ya | Tidak | Tidak secara default | Lab tertutup antara host dan VM |
+
+Gunakan **Bridged** jika website harus dibuka dari host dan perangkat lain pada Wi-Fi/LAN yang sama. VM akan terlihat seperti perangkat fisik tersendiri dan memperoleh alamat dari router yang sama dengan host.
+
+Gunakan **NAT** jika website hanya perlu diakses dari laptop host dan VM tetap memerlukan Internet. IP VM akan berada pada subnet virtual `VMnet8`, bukan selalu pada subnet router fisik.
+
+Gunakan **Host-only** untuk jaringan lab terisolasi. Jika VM juga perlu Internet, tambahkan adapter kedua bertipe NAT; jangan beri default gateway pada adapter Host-only agar tidak terjadi dua default route.
+
+### 2.2 Atur adapter VM menjadi Bridged
+
+1. Matikan VM Ubuntu Server.
+2. Buka **VM > Settings > Network Adapter**.
+3. Centang **Connected** dan **Connect at power on**.
+4. Pilih **Bridged: Connected directly to the physical network**.
+5. Aktifkan **Replicate physical network connection state** jika laptop sering berpindah antara Wi-Fi dan Ethernet.
+6. Jalankan kembali VM.
+
+Jika mode **Automatic** memilih adapter host yang salah:
+
+1. Buka **Edit > Virtual Network Editor** sebagai Administrator.
+2. Pilih `VMnet0` dengan tipe **Bridged**.
+3. Pada **Bridged to**, pilih adapter host yang benar, misalnya adapter Wi-Fi atau Ethernet yang sedang aktif.
+4. Simpan, kemudian restart koneksi atau VM.
+
+> Beberapa jaringan kampus, kantor, hotel, atau hotspot membatasi MAC address tambahan sehingga Bridged tidak memperoleh IP. Gunakan NAT jika kebijakan jaringan tersebut tidak mengizinkan VM sebagai perangkat terpisah.
+
+### 2.3 Dapatkan IP Ubuntu Server
+
+Mulai dengan DHCP untuk memastikan jaringan VMware bekerja sebelum menetapkan IP statis:
+
+```bash
+ip -4 -br address
+ip route
+hostname -I
+ping -c 4 1.1.1.1
+```
+
+Contoh hasil:
+
+```text
+ens33    UP    192.168.1.105/24
+```
+
+Pada VMware, nama interface Ubuntu sering berupa `ens33`, tetapi dapat berbeda. Gunakan nama yang benar dari hasil `ip -4 -br address`.
+
+Periksa subnet host:
+
+Windows host:
+
+```powershell
+ipconfig
+```
+
+Linux host:
+
+```bash
+ip -4 -br address
+ip route
+```
+
+Dalam mode Bridged, host dan VM harus berada pada subnet yang sama. Contohnya host `192.168.1.20/24`, VM `192.168.1.105/24`, dan gateway keduanya `192.168.1.1`.
+
+### 2.4 Uji akses dari host
+
+Setelah Apache dipasang pada bagian 5, uji port dari host.
+
+Windows PowerShell:
+
+```powershell
+Test-Connection 192.168.1.10 -Count 4
+Test-NetConnection 192.168.1.10 -Port 80
+curl.exe -I http://192.168.1.10
+```
+
+Linux/macOS:
+
+```bash
+ping -c 4 192.168.1.10
+curl -I http://192.168.1.10
+```
+
+Kemudian buka `http://192.168.1.10` pada browser host. Tes TCP/HTTP lebih menentukan daripada ping karena ICMP dapat diblokir firewall.
+
+Untuk mode NAT, ganti `192.168.1.10` dengan IP DHCP VM pada subnet `VMnet8`. Host biasanya dapat mengakses IP tersebut secara langsung, sedangkan laptop lain pada LAN tidak dapat memulai koneksi ke VM. Gunakan Bridged atau konfigurasi port forwarding NAT VMware jika perangkat LAN lain juga perlu mengaksesnya.
+
+### 2.5 Gunakan nama domain lokal pada host (opsional)
+
+Untuk pengujian tanpa DNS publik atau BIND9, petakan nama `webserver.test` langsung ke IP VM.
+
+Pada Windows, buka Notepad sebagai Administrator, lalu edit:
+
+```text
+C:\Windows\System32\drivers\etc\hosts
+```
+
+Pada Linux/macOS, edit `/etc/hosts` dengan hak administrator. Tambahkan baris yang sama pada kedua jenis host:
+
+```text
+192.168.1.10 webserver.test www.webserver.test
+```
+
+Tambahkan nama tersebut pada VirtualHost Apache di bagian 5:
+
+```apache
+ServerName example.com
+ServerAlias www.example.com webserver.test www.webserver.test
+```
+
+Muat ulang Apache dan uji dari host:
+
+```bash
+sudo apache2ctl configtest
+sudo systemctl reload apache2
+```
+
+```text
+http://webserver.test
+```
+
+Nama `.test` hanya berlaku pada host yang file `hosts`-nya diubah dan tidak dapat memperoleh sertifikat Let's Encrypt. Gunakan domain publik pada bagian 6 atau BIND9 pada bagian 7 jika nama harus tersedia untuk banyak perangkat.
+
+### 2.6 Troubleshooting koneksi host ke VM
+
+Jalankan pada Ubuntu Server:
+
+```bash
+ip link
+ip -4 address
+ip route
+sudo systemctl status apache2 --no-pager
+sudo ss -lntp | grep -E ':80|:443'
+sudo ufw status verbose
+```
+
+Periksa secara berurutan:
+
+1. Adapter VM berstatus **Connected** dan **Connect at power on**.
+2. VM memiliki IPv4 selain `127.0.0.1` dan `169.254.x.x`.
+3. IP statis, prefix, gateway, dan DNS sesuai subnet mode VMware.
+4. Apache mendengarkan pada `0.0.0.0:80`/`*:80`, bukan hanya `127.0.0.1:80`.
+5. UFW mengizinkan `Apache` atau `Apache Full`.
+6. Pada Bridged, `VMnet0` terhubung ke adapter fisik host yang sedang aktif.
+7. VPN atau firewall host tidak memblokir jaringan VMware.
+8. Jika Bridged gagal tetapi NAT berhasil, kemungkinan jaringan fisik tidak menerima MAC address tambahan atau adapter Bridged salah.
+
+## 3. Konfigurasi IP statis di Linux
+
+### 3.1 Identifikasi interface dan konfigurasi saat ini
 
 ```bash
 ip -br address
@@ -45,18 +205,20 @@ resolvectl status
 ls -l /etc/netplan/
 ```
 
-Catat nama interface aktif, misalnya `enp1s0`, serta gateway dan DNS yang sedang digunakan.
+Catat nama interface aktif, misalnya `ens33`, serta gateway dan DNS yang sedang digunakan.
 
-### 2.2 Konfigurasi Netplan pada Ubuntu Server
+### 3.2 Konfigurasi Netplan pada Ubuntu Server
 
-Buat atau edit `/etc/netplan/99-static-ip.yaml`:
+Buat atau edit `/etc/netplan/99-static-ip.yaml`.
+
+> Konfigurasi berikut khusus contoh **Bridged** pada LAN `192.168.1.0/24`. Untuk NAT atau Host-only, lihat subnet `VMnet8` atau `VMnet1` melalui **Virtual Network Editor**, lalu sesuaikan alamat, prefix, dan gateway. Jangan memakai `192.168.1.10` jika subnet VMware berbeda.
 
 ```yaml
 network:
   version: 2
   renderer: networkd
   ethernets:
-    enp1s0:
+    ens33:
       dhcp4: false
       addresses:
         - 192.168.1.10/24
@@ -81,9 +243,9 @@ sudo netplan try
 
 ```bash
 sudo netplan apply
-ip -br address show enp1s0
+ip -br address show ens33
 ip route
-resolvectl status enp1s0
+resolvectl status ens33
 ping -c 4 192.168.1.1
 ping -c 4 1.1.1.1
 getent hosts ubuntu.com
@@ -91,11 +253,11 @@ getent hosts ubuntu.com
 
 > Jika ada file Netplan lain yang juga mengatur interface yang sama, satukan konfigurasinya atau nonaktifkan definisi yang bertabrakan. Jangan mengedit `/etc/resolv.conf` langsung karena pada Ubuntu file tersebut umumnya dikelola oleh `systemd-resolved` melalui Netplan.
 
-## 3. Konfigurasi IP statis di Windows
+## 4. Konfigurasi IP statis di Windows
 
 Gunakan IP klien yang berbeda dari server, misalnya `192.168.1.20`.
 
-### 3.1 Melalui antarmuka grafis
+### 4.1 Melalui antarmuka grafis
 
 1. Buka **Settings > Network & internet**.
 2. Pilih **Ethernet** atau **Wi-Fi**, lalu buka properti jaringan.
@@ -106,10 +268,10 @@ Gunakan IP klien yang berbeda dari server, misalnya `192.168.1.20`.
    - Gateway: `192.168.1.1`
    - Preferred DNS untuk DNS publik: `1.1.1.1`
    - Alternate DNS: `9.9.9.9`
-5. Jika memakai BIND9 lokal pada bagian 6, gunakan `192.168.1.10` sebagai DNS utama klien.
+5. Jika memakai BIND9 lokal pada bagian 7, gunakan `192.168.1.10` sebagai DNS utama klien.
 6. Simpan, lalu buka ulang koneksi bila diperlukan.
 
-### 3.2 Melalui PowerShell
+### 4.2 Melalui PowerShell
 
 Jalankan PowerShell sebagai Administrator:
 
@@ -157,9 +319,9 @@ Set-DnsClientServerAddress -InterfaceAlias "Ethernet" -ResetServerAddresses
 
 > Nama interface dapat berupa `Ethernet`, `Ethernet 2`, atau `Wi-Fi`. Gunakan nilai yang tampil dari `Get-NetAdapter`.
 
-## 4. Instalasi dan konfigurasi Apache
+## 5. Instalasi dan konfigurasi Apache
 
-### 4.1 Instal Apache dan firewall
+### 5.1 Instal Apache dan firewall
 
 ```bash
 sudo apt update
@@ -186,7 +348,7 @@ curl -I http://127.0.0.1
 curl -I http://192.168.1.10
 ```
 
-### 4.2 Buat document root
+### 5.2 Buat document root
 
 ```bash
 sudo install -d -o "$USER" -g www-data -m 0755 /var/www/example.com/public_html
@@ -217,7 +379,7 @@ sudo find /var/www/example.com -type d -exec chmod 755 {} \;
 sudo find /var/www/example.com -type f -exec chmod 644 {} \;
 ```
 
-### 4.3 Buat VirtualHost
+### 5.3 Buat VirtualHost
 
 Buat `/etc/apache2/sites-available/example.com.conf`:
 
@@ -255,7 +417,7 @@ Hasil `configtest` harus menunjukkan `Syntax OK`. Uji VirtualHost sebelum DNS ak
 curl -I -H 'Host: example.com' http://127.0.0.1
 ```
 
-## 5. Konfigurasi DNS publik agar domain dapat diakses
+## 6. Konfigurasi DNS publik agar domain dapat diakses
 
 Untuk website Internet, cara paling sederhana dan andal adalah memakai authoritative DNS yang disediakan registrar atau penyedia DNS, bukan menjalankan BIND9 sendiri.
 
@@ -287,11 +449,11 @@ Hasil record `A` harus berupa IP publik asli, bukan `192.168.x.x`. Uji akses dar
 
 > Jika IP publik berubah-ubah, gunakan fitur Dynamic DNS/API penyedia DNS atau minta IP statis dari ISP. Jika IP WAN router berada pada rentang private atau CGNAT seperti `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, atau `100.64.0.0/10`, mintalah IP publik dari ISP atau gunakan reverse tunnel/VPS.
 
-## 6. DNS lokal dengan BIND9 (opsional)
+## 7. DNS lokal dengan BIND9 (opsional)
 
 Bagian ini berguna untuk domain lab/intranet seperti `lab.example.com`. Klien LAN harus memakai `192.168.1.10` sebagai DNS agar record lokal dapat ditemukan.
 
-### 6.1 Instal BIND9
+### 7.1 Instal BIND9
 
 ```bash
 sudo apt update
@@ -299,7 +461,7 @@ sudo apt install -y bind9 bind9-utils dnsutils
 sudo systemctl enable --now bind9
 ```
 
-### 6.2 Batasi resolver ke jaringan lokal
+### 7.2 Batasi resolver ke jaringan lokal
 
 Edit `/etc/bind/named.conf.options`:
 
@@ -328,7 +490,7 @@ options {
 };
 ```
 
-### 6.3 Tambahkan zona lokal
+### 7.3 Tambahkan zona lokal
 
 Tambahkan ke `/etc/bind/named.conf.local`:
 
@@ -386,11 +548,11 @@ Tambahkan VirtualHost Apache kedua jika `lab.example.com` juga harus dilayani ol
 
 > Untuk authoritative DNS publik self-hosted diperlukan minimal dua nameserver yang andal, delegasi NS dan glue record di registrar, port UDP/TCP `53`, serta resolver rekursif yang tidak terbuka ke Internet. Satu server BIND9 pada LAN tidak cukup untuk deployment authoritative DNS publik yang baik.
 
-## 7. Implementasi SSL dengan Let's Encrypt
+## 8. Implementasi SSL dengan Let's Encrypt
 
 Let's Encrypt hanya dapat menerbitkan sertifikat setelah `example.com` dan `www.example.com` mengarah ke server publik dan port TCP `80` atau metode validasi lain dapat dijangkau.
 
-### 7.1 Instal Certbot
+### 8.1 Instal Certbot
 
 Metode Snap direkomendasikan oleh dokumentasi Certbot:
 
@@ -405,7 +567,7 @@ sudo ln -s /snap/bin/certbot /usr/local/bin/certbot
 
 Jika `/usr/local/bin/certbot` sudah ada dan mengarah ke `/snap/bin/certbot`, lewati perintah `ln`.
 
-### 7.2 Terbitkan sertifikat dan aktifkan redirect HTTPS
+### 8.2 Terbitkan sertifikat dan aktifkan redirect HTTPS
 
 ```bash
 sudo certbot --apache \
@@ -427,7 +589,7 @@ openssl s_client -connect example.com:443 -servername example.com </dev/null
 
 Respons HTTP seharusnya mengarah ke HTTPS, dan HTTPS seharusnya tidak menampilkan kesalahan sertifikat.
 
-### 7.3 Uji perpanjangan otomatis
+### 8.3 Uji perpanjangan otomatis
 
 ```bash
 sudo certbot certificates
@@ -439,7 +601,7 @@ Certbot memasang timer/pekerjaan perpanjangan otomatis. Tidak perlu membuat cron
 
 > Sertifikat Let's Encrypt tidak cocok untuk nama yang hanya dapat diakses di DNS privat tanpa validasi domain publik. Untuk lab tertutup, gunakan internal Certificate Authority dan distribusikan root CA ke seluruh klien. Sertifikat self-signed boleh dipakai untuk pengujian, tetapi browser akan memberi peringatan sampai sertifikat/CA tersebut dipercaya.
 
-## 8. Pemeriksaan akhir
+## 9. Pemeriksaan akhir
 
 Jalankan pemeriksaan berikut:
 
@@ -480,6 +642,8 @@ sudo journalctl -u bind9 -n 100 --no-pager
 
 Checklist keberhasilan:
 
+- [ ] Adapter VMware terhubung dan mode jaringannya sesuai kebutuhan.
+- [ ] Host dapat mencapai port `80` VM melalui alamat IP VM.
 - [ ] Server selalu memperoleh IP LAN yang sama.
 - [ ] Apache aktif dan VirtualHost menunjukkan document root yang benar.
 - [ ] Record `A` domain publik mengarah ke IP publik yang benar.
@@ -490,7 +654,7 @@ Checklist keberhasilan:
 - [ ] `certbot renew --dry-run` berhasil.
 - [ ] DNS lokal, jika digunakan, hanya menerima kueri/rekursi dari jaringan tepercaya.
 
-## 9. Referensi resmi
+## 10. Referensi resmi
 
 - [Ubuntu Server: Install Apache2](https://documentation.ubuntu.com/server/how-to/web-services/install-apache2/)
 - [Ubuntu Server: Configure Apache2 settings](https://documentation.ubuntu.com/server/how-to/web-services/configure-apache2-settings/)
@@ -499,3 +663,5 @@ Checklist keberhasilan:
 - [Certbot: Instruksi Apache di Linux](https://certbot.eff.org/instructions?ws=apache&os=snap)
 - [Microsoft Learn: New-NetIPAddress](https://learn.microsoft.com/powershell/module/nettcpip/new-netipaddress)
 - [Microsoft Learn: Set-DnsClientServerAddress](https://learn.microsoft.com/powershell/module/dnsclient/set-dnsclientserveraddress)
+- [Broadcom KB: Troubleshooting network connection failures pada VMware](https://knowledge.broadcom.com/external/article/307964/)
+- [Broadcom KB: Memilih adapter fisik untuk Bridged/VMnet0](https://knowledge.broadcom.com/external/article/311353/)
