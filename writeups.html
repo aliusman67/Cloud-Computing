@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="id">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Write-ups keamanan siber oleh Ali Usman — catatan teknis, metodologi pengujian, dan pembelajaran dari security lab." />
+    <meta name="theme-color" content="#07110f" />
+    <title>Security Write-ups — Ali Usman</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='32' fill='%2307110f'/%3E%3Ctext x='32' y='39' text-anchor='middle' font-family='monospace' font-size='22' fill='%23b7f34a'%3EAU%3C/text%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="css/styles.css" />
+    <script src="js/writeups.js" defer></script>
+  </head>
+  <body class="writeups-page">
+    <a class="skip-link" href="#main-content">Lewati ke konten</a>
+    <div class="noise" aria-hidden="true"></div>
+    <div class="cursor-glow" aria-hidden="true"></div>
+
+    <header class="site-header scrolled">
+      <nav class="nav container" aria-label="Navigasi utama">
+        <a class="brand" href="index.html" aria-label="Ali Usman — halaman utama">
+          <span class="brand-mark">AU</span>
+          <span class="brand-copy">Ali Usman<small>Security Portfolio</small></span>
+        </a>
+        <button class="menu-toggle" type="button" aria-expanded="false" aria-controls="nav-links">
+          <span></span><span></span><span class="sr-only">Buka menu</span>
+        </button>
+        <div class="nav-links" id="nav-links">
+          <a href="index.html#about">Tentang</a>
+          <a href="index.html#expertise">Keahlian</a>
+          <a href="index.html#credentials">Kredensial</a>
+          <a href="index.html#work">Proyek</a>
+          <a href="writeups.html" aria-current="page">Write-ups</a>
+          <a class="nav-cta" href="index.html#contact">Mari bicara <span>↗</span></a>
+        </div>
+      </nav>
+    </header>
+
+    <main id="main-content">
+      <section class="writeups-hero section-pad">
+        <div class="container">
+          <div class="writeups-hero-grid">
+            <div>
+              <p class="eyebrow reveal"><span class="status-dot"></span> Knowledge base / field notes</p>
+              <h1 class="reveal">Security<br /><span>write-ups.</span></h1>
+            </div>
+            <div class="writeups-hero-copy reveal">
+              <p>Catatan dari proses belajar, eksperimen lab, dan pembongkaran masalah keamanan—ditulis agar temuan teknis lebih mudah dipahami dan direproduksi.</p>
+              <div class="writeup-count"><strong id="writeup-count">00</strong><span>Artikel<br />tersedia</span></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="writeups-index section-pad" aria-labelledby="writeups-title">
+        <div class="container">
+          <div class="section-heading reveal">
+            <p class="kicker" id="writeups-title">/ Semua catatan</p>
+            <span class="section-number">INDEX</span>
+          </div>
+          <div class="writeup-controls reveal">
+            <div class="search-field">
+              <span aria-hidden="true">⌕</span>
+              <label class="sr-only" for="writeup-search">Cari write-up</label>
+              <input id="writeup-search" type="search" placeholder="Cari topik, tools, atau kategori..." />
+            </div>
+            <div class="filters" id="writeup-filters" role="group" aria-label="Filter write-up"></div>
+          </div>
+          <div class="writeup-empty" id="writeup-empty" hidden>
+            <span>404</span><p>Tidak ada write-up yang cocok dengan pencarian.</p>
+          </div>
+          <div class="writeup-list" id="writeup-list" aria-live="polite"></div>
+        </div>
+      </section>
+
+      <section class="writeups-cta section-pad">
+        <div class="container contact-inner reveal">
+          <p class="kicker">/ Exchange knowledge</p>
+          <h2>Menemukan sesuatu yang <em>menarik?</em></h2>
+          <p>Mari berdiskusi tentang pendekatan, reproduksi, atau perspektif lain dari topik tersebut.</p>
+          <a class="button button-light" id="writeup-email" href="mailto:ali.usman@example.com">Mulai diskusi <span>↗</span></a>
+          <div class="contact-orbit" aria-hidden="true"></div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer writeups-footer">
+      <div class="container footer-inner">
+        <a class="brand" href="index.html"><span class="brand-mark">AU</span><span class="brand-copy">Ali Usman<small>Penetration Tester</small></span></a>
+        <p>© <span id="current-year"></span> Ali Usman. Notes from the field.</p>
+        <div class="socials"><a href="index.html">HOME ←</a><a href="#main-content">TOP ↑</a></div>
+      </div>
+    </footer>
+  </body>
+</html>
