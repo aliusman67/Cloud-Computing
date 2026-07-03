@@ -1,217 +1,191 @@
-# Panduan Setup Apache, DNS, SSL, dan IP Statis di Ubuntu Server VMware
+# Setup Web Server + DNS + SSL Self-Signed di Ubuntu Server VMware
 
-Dokumen ini merupakan README utama proyek sekaligus panduan deployment web statis pada server.
+Dokumentasi ini menjelaskan konfigurasi dari awal untuk membuat **Ubuntu Server di VMware** menjadi:
 
-Panduan ini menggunakan **Ubuntu Server di VMware Workstation/Player** sebagai server, **Apache2** sebagai web server, **BIND9** untuk DNS lokal (opsional), **Let's Encrypt/Certbot** untuk SSL publik, dan Windows/Linux pada laptop fisik sebagai host.
+- Web server Apache2
+- DNS server BIND9
+- HTTPS menggunakan self-signed SSL certificate
+- Domain lokal `aliusman.com`
+- Bisa diakses dari Linux client dan Windows client
 
-> Semua alamat pada panduan adalah contoh. Ganti sesuai jaringan dan domain Anda. Alamat publik `203.0.113.10` memang dicadangkan untuk dokumentasi dan tidak dapat dipakai sebagai alamat server nyata.
+Contoh konfigurasi yang digunakan:
 
-## 1. Rancangan contoh
-
-| Komponen | Nilai contoh |
+| Item | Value |
 |---|---|
-| Mode jaringan VMware | `Bridged` |
-| Domain publik | `example.com` |
-| Nama host web | `www.example.com` |
-| IP publik router/server | `203.0.113.10` |
-| IP lokal server | `192.168.1.10/24` |
-| Gateway LAN | `192.168.1.1` |
-| Interface Linux VM | `ens33` |
-| DNS lokal opsional | `192.168.1.10` |
-| Zona DNS lokal opsional | `lab.example.com` |
-| Document root Apache | `/var/www/example.com/public_html` |
+| Domain | `aliusman.com` |
+| Alias | `www.aliusman.com` |
+| Nameserver | `ns1.aliusman.com` |
+| IP Ubuntu Server VM | `172.16.141.129` |
+| Subnet | `172.16.141.0/24` |
+| Webroot | `/var/www/html/aliusman.com` |
+| Web Server | Apache2 |
+| DNS Server | BIND9 |
+| SSL | Self-signed |
 
-Alur akses dari laptop host:
+> Sesuaikan IP, gateway, interface, dan subnet dengan jaringan VMware kamu.
+
+---
+
+## 1. Topologi Lab VMware
+
+Contoh topologi:
 
 ```text
-Browser di host -> jaringan Bridged -> 192.168.1.10:80/443 -> Apache di VM
++----------------------+        +-------------------------+
+| Linux / Windows Host |        | Ubuntu Server VM         |
+| Browser Client       | <----> | Apache + BIND9 + SSL     |
+| DNS: 172.16.141.129  |        | IP: 172.16.141.129       |
++----------------------+        +-------------------------+
+              VMware Network: Bridged / Host-Only / NAT
 ```
 
-Alur akses publik:
+Untuk lab DNS dan webserver lokal, mode jaringan yang paling mudah:
 
-```text
-Browser -> DNS publik -> IP publik -> NAT/router -> 192.168.1.10:80/443 -> Apache
-```
+| VMware Network Mode | Keterangan | Rekomendasi |
+|---|---|---|
+| Bridged | VM berada satu jaringan dengan host dan perangkat LAN lain | Direkomendasikan jika ingin diakses dari host dan device lain satu jaringan |
+| Host-Only | Hanya bisa diakses dari host dan VM lain pada jaringan host-only | Bagus untuk lab offline |
+| NAT | VM keluar internet lewat host, akses dari LAN lain terbatas | Bisa dipakai, tapi perlu port forwarding jika diakses dari luar host |
 
-Sebelum mulai:
+Rekomendasi untuk kasus ini: gunakan **Bridged** atau **Host-Only**.
 
-1. Siapkan VM Ubuntu Server dengan akun yang memiliki akses `sudo`.
-2. Pastikan IP statis yang dipilih tidak sedang dipakai perangkat lain dan berada di luar pool DHCP, atau buat DHCP reservation di router.
-3. Miliki domain dan akses ke panel DNS domain tersebut.
-4. Jika server berada di belakang router, siapkan port forwarding TCP `80` dan `443` ke `192.168.1.10`.
-5. Pastikan koneksi ISP memiliki IP publik. Port forwarding biasa tidak bekerja jika koneksi berada di balik CGNAT.
+---
 
-## 2. Konfigurasi jaringan VMware agar VM dapat diakses host
+## 2. Setup Network Adapter di VMware
 
-### 2.1 Pilih mode jaringan
+### Opsi A — Bridged Adapter
 
-| Mode VMware | Akses dari host | Akses dari perangkat LAN lain | Internet di VM | Penggunaan |
-|---|---:|---:|---:|---|
-| **Bridged** | Ya | Ya | Ya | Direkomendasikan untuk web server LAN/publik |
-| **NAT** | Umumnya ya | Tidak langsung | Ya | Lab yang hanya perlu diakses host |
-| **Host-only** | Ya | Tidak | Tidak secara default | Lab tertutup antara host dan VM |
+Gunakan ini jika ingin Ubuntu Server VM bisa diakses dari laptop/PC host dan perangkat lain satu jaringan.
 
-Gunakan **Bridged** jika website harus dibuka dari host dan perangkat lain pada Wi-Fi/LAN yang sama. VM akan terlihat seperti perangkat fisik tersendiri dan memperoleh alamat dari router yang sama dengan host.
+Langkah:
 
-Gunakan **NAT** jika website hanya perlu diakses dari laptop host dan VM tetap memerlukan Internet. IP VM akan berada pada subnet virtual `VMnet8`, bukan selalu pada subnet router fisik.
-
-Gunakan **Host-only** untuk jaringan lab terisolasi. Jika VM juga perlu Internet, tambahkan adapter kedua bertipe NAT; jangan beri default gateway pada adapter Host-only agar tidak terjadi dua default route.
-
-### 2.2 Atur adapter VM menjadi Bridged
-
-1. Matikan VM Ubuntu Server.
-2. Buka **VM > Settings > Network Adapter**.
-3. Centang **Connected** dan **Connect at power on**.
+1. Shutdown Ubuntu Server VM.
+2. Buka **VMware Settings**.
+3. Pilih **Network Adapter**.
 4. Pilih **Bridged: Connected directly to the physical network**.
-5. Aktifkan **Replicate physical network connection state** jika laptop sering berpindah antara Wi-Fi dan Ethernet.
-6. Jalankan kembali VM.
+5. Centang **Replicate physical network connection state** jika tersedia.
+6. Start VM.
 
-Jika mode **Automatic** memilih adapter host yang salah:
+Pastikan IP statik `172.16.141.129` memang berada dalam subnet jaringan bridged kamu.
 
-1. Buka **Edit > Virtual Network Editor** sebagai Administrator.
-2. Pilih `VMnet0` dengan tipe **Bridged**.
-3. Pada **Bridged to**, pilih adapter host yang benar, misalnya adapter Wi-Fi atau Ethernet yang sedang aktif.
-4. Simpan, kemudian restart koneksi atau VM.
+### Opsi B — Host-Only Adapter
 
-> Beberapa jaringan kampus, kantor, hotel, atau hotspot membatasi MAC address tambahan sehingga Bridged tidak memperoleh IP. Gunakan NAT jika kebijakan jaringan tersebut tidak mengizinkan VM sebagai perangkat terpisah.
+Gunakan ini jika hanya ingin akses dari host ke VM.
 
-### 2.3 Dapatkan IP Ubuntu Server
+Langkah:
 
-Mulai dengan DHCP untuk memastikan jaringan VMware bekerja sebelum menetapkan IP statis:
+1. Shutdown Ubuntu Server VM.
+2. Buka **VMware Settings**.
+3. Pilih **Network Adapter**.
+4. Pilih **Host-only**.
+5. Start VM.
+6. Pastikan IP server mengikuti subnet VMnet host-only.
 
-```bash
-ip -4 -br address
-ip route
-hostname -I
-ping -c 4 1.1.1.1
-```
-
-Contoh hasil:
+Contoh jika VMnet host-only adalah `172.16.141.0/24`, maka server boleh memakai:
 
 ```text
-ens33    UP    192.168.1.105/24
+IP      : 172.16.141.129
+Netmask : 255.255.255.0
+Gateway : kosong atau gateway VMnet host-only jika ada
+DNS     : 172.16.141.129
 ```
 
-Pada VMware, nama interface Ubuntu sering berupa `ens33`, tetapi dapat berbeda. Gunakan nama yang benar dari hasil `ip -4 -br address`.
+### Opsi C — NAT Adapter
 
-Periksa subnet host:
+Gunakan NAT jika VM tetap perlu internet, tetapi akses dari luar host tidak prioritas.
 
-Windows host:
+Cek subnet NAT VMware. Biasanya berbeda, misalnya `192.168.x.0/24` atau `172.16.x.0/24`.
 
-```powershell
+Di Windows host:
+
+```cmd
 ipconfig
 ```
 
-Linux host:
+Cari adapter:
+
+```text
+VMware Network Adapter VMnet8
+```
+
+Di Linux host:
 
 ```bash
-ip -4 -br address
+ip addr
 ip route
 ```
 
-Dalam mode Bridged, host dan VM harus berada pada subnet yang sama. Contohnya host `192.168.1.20/24`, VM `192.168.1.105/24`, dan gateway keduanya `192.168.1.1`.
+Cari interface VMware seperti `vmnet8`.
 
-### 2.4 Uji akses dari host
+Jika NAT subnet bukan `172.16.141.0/24`, ganti semua IP di README ini sesuai subnet NAT kamu.
 
-Setelah Apache dipasang pada bagian 5, uji port dari host.
+---
 
-Windows PowerShell:
+## 3. Cek IP, Gateway, dan Interface di Ubuntu Server VM
 
-```powershell
-Test-Connection 192.168.1.10 -Count 4
-Test-NetConnection 192.168.1.10 -Port 80
-curl.exe -I http://192.168.1.10
-```
-
-Linux/macOS:
+Login ke Ubuntu Server VM lalu cek interface:
 
 ```bash
-ping -c 4 192.168.1.10
-curl -I http://192.168.1.10
+ip a
 ```
 
-Kemudian buka `http://192.168.1.10` pada browser host. Tes TCP/HTTP lebih menentukan daripada ping karena ICMP dapat diblokir firewall.
-
-Untuk mode NAT, ganti `192.168.1.10` dengan IP DHCP VM pada subnet `VMnet8`. Host biasanya dapat mengakses IP tersebut secara langsung, sedangkan laptop lain pada LAN tidak dapat memulai koneksi ke VM. Gunakan Bridged atau konfigurasi port forwarding NAT VMware jika perangkat LAN lain juga perlu mengaksesnya.
-
-### 2.5 Gunakan nama domain lokal pada host (opsional)
-
-Untuk pengujian tanpa DNS publik atau BIND9, petakan nama `webserver.test` langsung ke IP VM.
-
-Pada Windows, buka Notepad sebagai Administrator, lalu edit:
+Contoh nama interface:
 
 ```text
-C:\Windows\System32\drivers\etc\hosts
+ens33
+enp0s3
+eth0
 ```
 
-Pada Linux/macOS, edit `/etc/hosts` dengan hak administrator. Tambahkan baris yang sama pada kedua jenis host:
-
-```text
-192.168.1.10 webserver.test www.webserver.test
-```
-
-Tambahkan nama tersebut pada VirtualHost Apache di bagian 5:
-
-```apache
-ServerName example.com
-ServerAlias www.example.com webserver.test www.webserver.test
-```
-
-Muat ulang Apache dan uji dari host:
+Cek gateway:
 
 ```bash
-sudo apache2ctl configtest
-sudo systemctl reload apache2
-```
-
-```text
-http://webserver.test
-```
-
-Nama `.test` hanya berlaku pada host yang file `hosts`-nya diubah dan tidak dapat memperoleh sertifikat Let's Encrypt. Gunakan domain publik pada bagian 6 atau BIND9 pada bagian 7 jika nama harus tersedia untuk banyak perangkat.
-
-### 2.6 Troubleshooting koneksi host ke VM
-
-Jalankan pada Ubuntu Server:
-
-```bash
-ip link
-ip -4 address
 ip route
-sudo systemctl status apache2 --no-pager
-sudo ss -lntp | grep -E ':80|:443'
-sudo ufw status verbose
 ```
 
-Periksa secara berurutan:
+Contoh output:
 
-1. Adapter VM berstatus **Connected** dan **Connect at power on**.
-2. VM memiliki IPv4 selain `127.0.0.1` dan `169.254.x.x`.
-3. IP statis, prefix, gateway, dan DNS sesuai subnet mode VMware.
-4. Apache mendengarkan pada `0.0.0.0:80`/`*:80`, bukan hanya `127.0.0.1:80`.
-5. UFW mengizinkan `Apache` atau `Apache Full`.
-6. Pada Bridged, `VMnet0` terhubung ke adapter fisik host yang sedang aktif.
-7. VPN atau firewall host tidak memblokir jaringan VMware.
-8. Jika Bridged gagal tetapi NAT berhasil, kemungkinan jaringan fisik tidak menerima MAC address tambahan atau adapter Bridged salah.
+```text
+default via 172.16.141.1 dev ens33
+```
 
-## 3. Konfigurasi IP statis di Linux
+Berarti:
 
-### 3.1 Identifikasi interface dan konfigurasi saat ini
+```text
+Interface : ens33
+Gateway   : 172.16.141.1
+Subnet    : 172.16.141.0/24
+```
+
+---
+
+## 4. Setup Static IP di Ubuntu Server VM
+
+Cek file netplan:
 
 ```bash
-ip -br address
-ip route
-resolvectl status
-ls -l /etc/netplan/
+ls /etc/netplan/
 ```
 
-Catat nama interface aktif, misalnya `ens33`, serta gateway dan DNS yang sedang digunakan.
+Contoh file:
 
-### 3.2 Konfigurasi Netplan pada Ubuntu Server
+```text
+00-installer-config.yaml
+```
 
-Buat atau edit `/etc/netplan/99-static-ip.yaml`.
+Backup dulu:
 
-> Konfigurasi berikut khusus contoh **Bridged** pada LAN `192.168.1.0/24`. Untuk NAT atau Host-only, lihat subnet `VMnet8` atau `VMnet1` melalui **Virtual Network Editor**, lalu sesuaikan alamat, prefix, dan gateway. Jangan memakai `192.168.1.10` jika subnet VMware berbeda.
+```bash
+sudo cp /etc/netplan/00-installer-config.yaml /etc/netplan/00-installer-config.yaml.bak
+```
+
+Edit netplan:
+
+```bash
+sudo nano /etc/netplan/00-installer-config.yaml
+```
+
+Contoh konfigurasi untuk interface `ens33`:
 
 ```yaml
 network:
@@ -221,447 +195,1069 @@ network:
     ens33:
       dhcp4: false
       addresses:
-        - 192.168.1.10/24
+        - 172.16.141.129/24
       routes:
         - to: default
-          via: 192.168.1.1
+          via: 172.16.141.1
       nameservers:
         addresses:
-          - 1.1.1.1
-          - 9.9.9.9
+          - 172.16.141.129
+          - 8.8.8.8
 ```
 
-Amankan file, validasi, lalu terapkan:
+> Ganti `ens33` dan `172.16.141.1` sesuai interface dan gateway kamu.
 
-```bash
-sudo chmod 600 /etc/netplan/99-static-ip.yaml
-sudo netplan generate
-sudo netplan try
-```
-
-`netplan try` akan meminta konfirmasi dan mengembalikan konfigurasi lama jika koneksi terputus. Ini lebih aman saat konfigurasi dilakukan melalui SSH. Setelah berhasil:
+Apply konfigurasi:
 
 ```bash
 sudo netplan apply
-ip -br address show ens33
+```
+
+Cek hasil:
+
+```bash
+ip a
 ip route
-resolvectl status ens33
-ping -c 4 192.168.1.1
-ping -c 4 1.1.1.1
-getent hosts ubuntu.com
 ```
 
-> Jika ada file Netplan lain yang juga mengatur interface yang sama, satukan konfigurasinya atau nonaktifkan definisi yang bertabrakan. Jangan mengedit `/etc/resolv.conf` langsung karena pada Ubuntu file tersebut umumnya dikelola oleh `systemd-resolved` melalui Netplan.
+Test koneksi internet:
 
-## 4. Konfigurasi IP statis di Windows
-
-Gunakan IP klien yang berbeda dari server, misalnya `192.168.1.20`.
-
-### 4.1 Melalui antarmuka grafis
-
-1. Buka **Settings > Network & internet**.
-2. Pilih **Ethernet** atau **Wi-Fi**, lalu buka properti jaringan.
-3. Pada **IP assignment**, klik **Edit**.
-4. Pilih **Manual**, aktifkan **IPv4**, lalu isi:
-   - IP address: `192.168.1.20`
-   - Subnet prefix length: `24`
-   - Gateway: `192.168.1.1`
-   - Preferred DNS untuk DNS publik: `1.1.1.1`
-   - Alternate DNS: `9.9.9.9`
-5. Jika memakai BIND9 lokal pada bagian 7, gunakan `192.168.1.10` sebagai DNS utama klien.
-6. Simpan, lalu buka ulang koneksi bila diperlukan.
-
-### 4.2 Melalui PowerShell
-
-Jalankan PowerShell sebagai Administrator:
-
-```powershell
-Get-NetAdapter
-Get-NetIPConfiguration
-
-New-NetIPAddress `
-  -InterfaceAlias "Ethernet" `
-  -IPAddress 192.168.1.20 `
-  -PrefixLength 24 `
-  -DefaultGateway 192.168.1.1
-
-Set-DnsClientServerAddress `
-  -InterfaceAlias "Ethernet" `
-  -ServerAddresses ("1.1.1.1", "9.9.9.9")
+```bash
+ping -c 4 8.8.8.8
+ping -c 4 google.com
 ```
 
-Untuk memakai DNS lokal BIND9:
+Jika `ping 8.8.8.8` berhasil tetapi `ping google.com` gagal, berarti DNS resolver belum benar.
 
-```powershell
-Set-DnsClientServerAddress `
-  -InterfaceAlias "Ethernet" `
-  -ServerAddresses ("192.168.1.10")
-```
+---
 
-Verifikasi:
+## 5. Setup Dependencies
 
-```powershell
-Get-NetIPConfiguration -InterfaceAlias "Ethernet"
-Test-Connection 192.168.1.10 -Count 4
-Resolve-DnsName example.com
-```
-
-Kembali ke DHCP jika diperlukan:
-
-```powershell
-Get-NetIPAddress -InterfaceAlias "Ethernet" -AddressFamily IPv4 |
-  Where-Object PrefixOrigin -eq "Manual" |
-  Remove-NetIPAddress -Confirm:$false
-
-Set-NetIPInterface -InterfaceAlias "Ethernet" -AddressFamily IPv4 -Dhcp Enabled
-Set-DnsClientServerAddress -InterfaceAlias "Ethernet" -ResetServerAddresses
-```
-
-> Nama interface dapat berupa `Ethernet`, `Ethernet 2`, atau `Wi-Fi`. Gunakan nilai yang tampil dari `Get-NetAdapter`.
-
-## 5. Instalasi dan konfigurasi Apache
-
-### 5.1 Instal Apache dan firewall
+Update repository:
 
 ```bash
 sudo apt update
-sudo apt install -y apache2 rsync
-sudo systemctl enable --now apache2
-sudo systemctl status apache2 --no-pager
+sudo apt upgrade -y
 ```
 
-Jika UFW digunakan:
+Install Apache, BIND9, OpenSSL, DNS tools, dan UFW:
 
 ```bash
-sudo ufw allow OpenSSH
-sudo ufw allow "Apache Full"
-sudo ufw enable
-sudo ufw status verbose
+sudo apt install apache2 bind9 bind9utils dnsutils openssl ufw -y
 ```
 
-`Apache Full` membuka TCP `80` untuk HTTP dan TCP `443` untuk HTTPS. Pastikan SSH sudah diizinkan sebelum mengaktifkan UFW pada server remote.
-
-Uji dari server dan komputer lain di LAN:
+Enable service:
 
 ```bash
-curl -I http://127.0.0.1
-curl -I http://192.168.1.10
+sudo systemctl enable apache2
+sudo systemctl enable bind9
 ```
 
-### 5.2 Buat document root
+---
+
+## 6. Setup Hostname dan Hosts File Server
+
+Set hostname:
 
 ```bash
-sudo install -d -o "$USER" -g www-data -m 0755 /var/www/example.com/public_html
+sudo hostnamectl set-hostname srv01
 ```
 
-Buat halaman uji:
+Edit `/etc/hosts`:
 
 ```bash
-sudo tee /var/www/example.com/public_html/index.html >/dev/null <<'HTML'
-<!doctype html>
-<html lang="id">
-<head><meta charset="utf-8"><title>Apache aktif</title></head>
-<body><h1>Apache, DNS, dan domain berhasil dikonfigurasi.</h1></body>
+sudo nano /etc/hosts
+```
+
+Isi:
+
+```text
+127.0.0.1       localhost
+172.16.141.129  srv01 aliusman.com www.aliusman.com ns1.aliusman.com
+```
+
+Cek hostname:
+
+```bash
+hostnamectl
+```
+
+---
+
+## 7. Setup Webroot Apache
+
+Buat folder website:
+
+```bash
+sudo mkdir -p /var/www/html/aliusman.com
+```
+
+Buat file index:
+
+```bash
+sudo nano /var/www/html/aliusman.com/index.html
+```
+
+Isi:
+
+```html
+<!DOCTYPE html>
+<html>
+<head>
+    <title>aliusman.com</title>
+</head>
+<body>
+    <h1>aliusman.com berhasil berjalan</h1>
+    <p>Apache2 + BIND9 + Self-Signed SSL on Ubuntu Server VMware</p>
+</body>
 </html>
-HTML
 ```
 
-Untuk menyalin proyek web statis dari direktori proyek saat ini:
+Set permission:
 
 ```bash
-sudo rsync -av \
-  --exclude '.git/' \
-  --exclude 'SETUP_APACHE_DNS_SSL_STATIC_IP.md' \
-  ./ /var/www/example.com/public_html/
-
-sudo chown -R www-data:www-data /var/www/example.com
-sudo find /var/www/example.com -type d -exec chmod 755 {} \;
-sudo find /var/www/example.com -type f -exec chmod 644 {} \;
+sudo chown -R www-data:www-data /var/www/html/aliusman.com
+sudo find /var/www/html/aliusman.com -type d -exec chmod 755 {} \;
+sudo find /var/www/html/aliusman.com -type f -exec chmod 644 {} \;
+sudo chmod 755 /var/www
+sudo chmod 755 /var/www/html
 ```
 
-### 5.3 Buat VirtualHost
+---
 
-Buat `/etc/apache2/sites-available/example.com.conf`:
+## 8. Setup SSL Self-Signed Certificate
+
+Buat self-signed certificate dengan SAN untuk domain dan IP:
+
+```bash
+sudo openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+-keyout /etc/ssl/private/aliusman.com-selfsigned.key \
+-out /etc/ssl/certs/aliusman.com-selfsigned.crt \
+-subj "/C=ID/ST=Jakarta/L=Jakarta/O=Aliusman Lab/OU=IT/CN=aliusman.com" \
+-addext "subjectAltName=DNS:aliusman.com,DNS:www.aliusman.com,DNS:ns1.aliusman.com,IP:172.16.141.129"
+```
+
+Set permission:
+
+```bash
+sudo chmod 600 /etc/ssl/private/aliusman.com-selfsigned.key
+sudo chmod 644 /etc/ssl/certs/aliusman.com-selfsigned.crt
+sudo chown root:root /etc/ssl/private/aliusman.com-selfsigned.key
+sudo chown root:root /etc/ssl/certs/aliusman.com-selfsigned.crt
+```
+
+Cek file SSL:
+
+```bash
+sudo ls -lah /etc/ssl/private/aliusman.com-selfsigned.key
+sudo ls -lah /etc/ssl/certs/aliusman.com-selfsigned.crt
+```
+
+---
+
+## 9. Setup Apache HTTP + HTTPS
+
+Aktifkan module Apache:
+
+```bash
+sudo a2enmod ssl
+sudo a2enmod rewrite
+sudo a2enmod headers
+```
+
+Buat file virtual host:
+
+```bash
+sudo nano /etc/apache2/sites-available/aliusman.com.conf
+```
+
+Isi konfigurasi berikut:
 
 ```apache
 <VirtualHost *:80>
-    ServerName example.com
-    ServerAlias www.example.com
+    ServerName aliusman.com
+    ServerAlias www.aliusman.com
 
-    DocumentRoot /var/www/example.com/public_html
+    Redirect permanent / https://aliusman.com/
+</VirtualHost>
 
-    <Directory /var/www/example.com/public_html>
+<IfModule mod_ssl.c>
+<VirtualHost *:443>
+    ServerAdmin admin@aliusman.com
+    ServerName aliusman.com
+    ServerAlias www.aliusman.com
+
+    DocumentRoot /var/www/html/aliusman.com
+
+    <Directory /var/www/html/aliusman.com>
         Options -Indexes +FollowSymLinks
-        AllowOverride None
+        AllowOverride All
         Require all granted
     </Directory>
 
-    ErrorLog ${APACHE_LOG_DIR}/example.com-error.log
-    CustomLog ${APACHE_LOG_DIR}/example.com-access.log combined
+    SSLEngine on
+    SSLCertificateFile /etc/ssl/certs/aliusman.com-selfsigned.crt
+    SSLCertificateKeyFile /etc/ssl/private/aliusman.com-selfsigned.key
+
+    ErrorLog ${APACHE_LOG_DIR}/aliusman.com_ssl_error.log
+    CustomLog ${APACHE_LOG_DIR}/aliusman.com_ssl_access.log combined
 </VirtualHost>
+</IfModule>
 ```
 
-Aktifkan situs dan validasi konfigurasi:
+Disable default site:
 
 ```bash
-sudo a2ensite example.com.conf
 sudo a2dissite 000-default.conf
+```
+
+Enable site:
+
+```bash
+sudo a2ensite aliusman.com.conf
+```
+
+Cek konfigurasi Apache:
+
+```bash
 sudo apache2ctl configtest
-sudo systemctl reload apache2
+```
+
+Jika hasilnya:
+
+```text
+Syntax OK
+```
+
+Restart Apache:
+
+```bash
+sudo systemctl restart apache2
+sudo systemctl status apache2 --no-pager
+```
+
+Cek virtual host:
+
+```bash
 sudo apache2ctl -S
 ```
 
-Hasil `configtest` harus menunjukkan `Syntax OK`. Uji VirtualHost sebelum DNS aktif:
+Pastikan ada vhost untuk port `80` dan `443`.
+
+---
+
+## 10. Setup DNS Server BIND9
+
+Buat folder zone:
 
 ```bash
-curl -I -H 'Host: example.com' http://127.0.0.1
+sudo mkdir -p /etc/bind/zones
 ```
 
-## 6. Konfigurasi DNS publik agar domain dapat diakses
-
-Untuk website Internet, cara paling sederhana dan andal adalah memakai authoritative DNS yang disediakan registrar atau penyedia DNS, bukan menjalankan BIND9 sendiri.
-
-Tambahkan record berikut pada panel DNS domain:
-
-| Type | Name/Host | Value/Target | TTL |
-|---|---|---|---|
-| `A` | `@` | IP publik asli server/router | `300` atau Auto |
-| `CNAME` | `www` | `example.com` | `300` atau Auto |
-
-Alternatifnya, `www` dapat memakai record `A` ke IP publik yang sama. Jangan membuat record `AAAA` kecuali server benar-benar memiliki IPv6 publik yang aktif dan dapat menerima trafik pada port `80/443`.
-
-Jika server berada di belakang router:
-
-| Port publik | Protokol | Tujuan LAN |
-|---|---|---|
-| `80` | TCP | `192.168.1.10:80` |
-| `443` | TCP | `192.168.1.10:443` |
-
-Verifikasi propagasi DNS dari resolver publik:
+Edit local zone:
 
 ```bash
-dig +short A example.com @1.1.1.1
-dig +short A www.example.com @1.1.1.1
-curl -I http://example.com
+sudo nano /etc/bind/named.conf.local
 ```
 
-Hasil record `A` harus berupa IP publik asli, bukan `192.168.x.x`. Uji akses dari jaringan luar, misalnya data seluler, karena beberapa router tidak mendukung NAT loopback/hairpin.
+Isi:
 
-> Jika IP publik berubah-ubah, gunakan fitur Dynamic DNS/API penyedia DNS atau minta IP statis dari ISP. Jika IP WAN router berada pada rentang private atau CGNAT seperti `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, atau `100.64.0.0/10`, mintalah IP publik dari ISP atau gunakan reverse tunnel/VPS.
+```conf
+zone "aliusman.com" {
+    type master;
+    file "/etc/bind/zones/db.aliusman.com";
+};
 
-## 7. DNS lokal dengan BIND9 (opsional)
+zone "141.16.172.in-addr.arpa" {
+    type master;
+    file "/etc/bind/zones/db.172.16.141";
+};
+```
 
-Bagian ini berguna untuk domain lab/intranet seperti `lab.example.com`. Klien LAN harus memakai `192.168.1.10` sebagai DNS agar record lokal dapat ditemukan.
+---
 
-### 7.1 Instal BIND9
+## 11. Buat Forward Zone
+
+Buat file:
 
 ```bash
-sudo apt update
-sudo apt install -y bind9 bind9-utils dnsutils
-sudo systemctl enable --now bind9
+sudo nano /etc/bind/zones/db.aliusman.com
 ```
 
-### 7.2 Batasi resolver ke jaringan lokal
+Isi:
 
-Edit `/etc/bind/named.conf.options`:
+```dns
+$TTL    604800
+@       IN      SOA     ns1.aliusman.com. admin.aliusman.com. (
+                        2026070201 ; Serial
+                        604800     ; Refresh
+                        86400      ; Retry
+                        2419200    ; Expire
+                        604800 )   ; Negative Cache TTL
 
-```bind
-acl trusted_lan {
+; Name Server
+@       IN      NS      ns1.aliusman.com.
+
+; A Records
+@       IN      A       172.16.141.129
+ns1     IN      A       172.16.141.129
+www     IN      A       172.16.141.129
+```
+
+---
+
+## 12. Buat Reverse Zone
+
+Buat file:
+
+```bash
+sudo nano /etc/bind/zones/db.172.16.141
+```
+
+Isi:
+
+```dns
+$TTL    604800
+@       IN      SOA     ns1.aliusman.com. admin.aliusman.com. (
+                        2026070201 ; Serial
+                        604800     ; Refresh
+                        86400      ; Retry
+                        2419200    ; Expire
+                        604800 )   ; Negative Cache TTL
+
+@       IN      NS      ns1.aliusman.com.
+
+129     IN      PTR     aliusman.com.
+129     IN      PTR     www.aliusman.com.
+129     IN      PTR     ns1.aliusman.com.
+```
+
+---
+
+## 13. Konfigurasi BIND9 Options
+
+Edit:
+
+```bash
+sudo nano /etc/bind/named.conf.options
+```
+
+Isi:
+
+```conf
+acl "trusted" {
     127.0.0.1;
-    192.168.1.0/24;
+    172.16.141.0/24;
 };
 
 options {
     directory "/var/cache/bind";
 
     recursion yes;
-    allow-query { trusted_lan; };
-    allow-recursion { trusted_lan; };
+    allow-recursion { trusted; };
+    allow-query { trusted; };
 
-    listen-on { 127.0.0.1; 192.168.1.10; };
+    listen-on { 127.0.0.1; 172.16.141.129; };
     listen-on-v6 { none; };
 
     forwarders {
+        8.8.8.8;
         1.1.1.1;
-        9.9.9.9;
     };
 
     dnssec-validation auto;
 };
 ```
 
-### 7.3 Tambahkan zona lokal
+---
 
-Tambahkan ke `/etc/bind/named.conf.local`:
+## 14. Validasi dan Restart BIND9
 
-```bind
-zone "lab.example.com" {
-    type master;
-    file "/etc/bind/db.lab.example.com";
-};
-```
-
-Buat `/etc/bind/db.lab.example.com`:
-
-```dns
-$TTL 300
-@   IN  SOA ns1.lab.example.com. admin.lab.example.com. (
-        2026070201 ; serial YYYYMMDDnn
-        3600       ; refresh
-        900        ; retry
-        604800     ; expire
-        300        ; negative cache TTL
-)
-
-@       IN  NS      ns1.lab.example.com.
-ns1     IN  A       192.168.1.10
-@       IN  A       192.168.1.10
-www     IN  A       192.168.1.10
-```
-
-Naikkan nilai `serial` setiap kali zone file diubah. Lalu validasi dan muat ulang:
+Cek konfigurasi BIND9:
 
 ```bash
-sudo chown root:bind /etc/bind/db.lab.example.com
-sudo chmod 640 /etc/bind/db.lab.example.com
 sudo named-checkconf
-sudo named-checkzone lab.example.com /etc/bind/db.lab.example.com
+```
+
+Cek forward zone:
+
+```bash
+sudo named-checkzone aliusman.com /etc/bind/zones/db.aliusman.com
+```
+
+Cek reverse zone:
+
+```bash
+sudo named-checkzone 141.16.172.in-addr.arpa /etc/bind/zones/db.172.16.141
+```
+
+Jika hasilnya `OK`, restart BIND9:
+
+```bash
 sudo systemctl restart bind9
 sudo systemctl status bind9 --no-pager
 ```
 
-Jika UFW aktif, izinkan DNS hanya dari LAN:
+---
+
+## 15. Setup Firewall Ubuntu Server
+
+Izinkan SSH, DNS, HTTP, dan HTTPS:
 
 ```bash
-sudo ufw allow from 192.168.1.0/24 to any port 53 proto udp
-sudo ufw allow from 192.168.1.0/24 to any port 53 proto tcp
+sudo ufw allow 22/tcp
+sudo ufw allow 53/tcp
+sudo ufw allow 53/udp
+sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp
 ```
 
-Uji dari server dan klien:
+Aktifkan UFW:
 
 ```bash
-dig @127.0.0.1 lab.example.com
-dig @192.168.1.10 www.lab.example.com
+sudo ufw enable
 ```
 
-Tambahkan VirtualHost Apache kedua jika `lab.example.com` juga harus dilayani oleh Apache, atau ubah `ServerName`/`ServerAlias` pada VirtualHost yang ada.
-
-> Untuk authoritative DNS publik self-hosted diperlukan minimal dua nameserver yang andal, delegasi NS dan glue record di registrar, port UDP/TCP `53`, serta resolver rekursif yang tidak terbuka ke Internet. Satu server BIND9 pada LAN tidak cukup untuk deployment authoritative DNS publik yang baik.
-
-## 8. Implementasi SSL dengan Let's Encrypt
-
-Let's Encrypt hanya dapat menerbitkan sertifikat setelah `example.com` dan `www.example.com` mengarah ke server publik dan port TCP `80` atau metode validasi lain dapat dijangkau.
-
-### 8.1 Instal Certbot
-
-Metode Snap direkomendasikan oleh dokumentasi Certbot:
+Cek status:
 
 ```bash
-sudo apt update
-sudo apt install -y snapd
-sudo snap install core
-sudo snap refresh core
-sudo snap install --classic certbot
-sudo ln -s /snap/bin/certbot /usr/local/bin/certbot
+sudo ufw status
 ```
 
-Jika `/usr/local/bin/certbot` sudah ada dan mengarah ke `/snap/bin/certbot`, lewati perintah `ln`.
+---
 
-### 8.2 Terbitkan sertifikat dan aktifkan redirect HTTPS
+## 16. Test dari Ubuntu Server VM
+
+Test DNS:
 
 ```bash
-sudo certbot --apache \
-  -d example.com \
-  -d www.example.com
+dig @172.16.141.129 aliusman.com
+dig @172.16.141.129 www.aliusman.com
+dig @172.16.141.129 ns1.aliusman.com
 ```
 
-Masukkan email, setujui Terms of Service, dan pilih redirect HTTP ke HTTPS ketika diminta. Certbot akan membuat/mengubah VirtualHost port `443`, memasang sertifikat, dan mengaktifkan modul Apache yang diperlukan.
-
-Validasi:
+Test reverse DNS:
 
 ```bash
-sudo apache2ctl configtest
-sudo systemctl reload apache2
-curl -I http://example.com
-curl -I https://example.com
-openssl s_client -connect example.com:443 -servername example.com </dev/null
+dig @172.16.141.129 -x 172.16.141.129
 ```
 
-Respons HTTP seharusnya mengarah ke HTTPS, dan HTTPS seharusnya tidak menampilkan kesalahan sertifikat.
-
-### 8.3 Uji perpanjangan otomatis
+Test HTTP redirect:
 
 ```bash
-sudo certbot certificates
-sudo certbot renew --dry-run
-systemctl list-timers | grep -i certbot
+curl -I http://aliusman.com
 ```
 
-Certbot memasang timer/pekerjaan perpanjangan otomatis. Tidak perlu membuat cron tambahan jika `renew --dry-run` berhasil.
+Expected:
 
-> Sertifikat Let's Encrypt tidak cocok untuk nama yang hanya dapat diakses di DNS privat tanpa validasi domain publik. Untuk lab tertutup, gunakan internal Certificate Authority dan distribusikan root CA ke seluruh klien. Sertifikat self-signed boleh dipakai untuk pengujian, tetapi browser akan memberi peringatan sampai sertifikat/CA tersebut dipercaya.
+```text
+HTTP/1.1 301 Moved Permanently
+Location: https://aliusman.com/
+```
 
-## 9. Pemeriksaan akhir
-
-Jalankan pemeriksaan berikut:
+Test HTTPS:
 
 ```bash
-# Alamat dan routing
-ip -br address
+curl -k -I https://aliusman.com
+```
+
+Expected:
+
+```text
+HTTP/1.1 200 OK
+```
+
+Test isi website:
+
+```bash
+curl -k https://aliusman.com
+```
+
+---
+
+# 17. Setup DNS Client di Linux Host
+
+Bagian ini dilakukan di **Linux host/client**, bukan di Ubuntu Server VM.
+
+Tujuannya agar ketika membuka:
+
+```text
+https://aliusman.com
+```
+
+Linux host akan resolve domain ke:
+
+```text
+172.16.141.129
+```
+
+---
+
+## Opsi A — Linux Client dengan NetworkManager
+
+Cek nama koneksi:
+
+```bash
+nmcli con show
+```
+
+Contoh nama koneksi:
+
+```text
+Wired connection 1
+```
+
+Set DNS ke Ubuntu Server VM:
+
+```bash
+sudo nmcli con mod "Wired connection 1" ipv4.dns "172.16.141.129"
+sudo nmcli con mod "Wired connection 1" ipv4.ignore-auto-dns yes
+sudo nmcli con down "Wired connection 1"
+sudo nmcli con up "Wired connection 1"
+```
+
+Cek DNS aktif:
+
+```bash
+resolvectl status
+```
+
+Flush cache DNS:
+
+```bash
+sudo resolvectl flush-caches
+```
+
+Test:
+
+```bash
+nslookup aliusman.com
+dig aliusman.com
+ping aliusman.com
+curl -k https://aliusman.com
+```
+
+---
+
+## Opsi B — Linux Client dengan systemd-resolved
+
+Cek interface:
+
+```bash
+ip link
+```
+
+Misalnya interface client:
+
+```text
+enp0s3
+```
+
+Set DNS:
+
+```bash
+sudo resolvectl dns enp0s3 172.16.141.129
+sudo resolvectl domain enp0s3 aliusman.com
+sudo resolvectl flush-caches
+```
+
+Test:
+
+```bash
+resolvectl query aliusman.com
+curl -k https://aliusman.com
+```
+
+---
+
+## Opsi C — Linux Client Sementara via `/etc/resolv.conf`
+
+Edit:
+
+```bash
+sudo nano /etc/resolv.conf
+```
+
+Isi:
+
+```text
+nameserver 172.16.141.129
+```
+
+Test:
+
+```bash
+nslookup aliusman.com
+curl -k https://aliusman.com
+```
+
+> Catatan: `/etc/resolv.conf` bisa berubah otomatis setelah reboot atau reconnect jaringan.
+
+---
+
+## Opsi D — Linux Client via `/etc/hosts`
+
+Jika tidak ingin mengubah DNS client, tambahkan mapping manual:
+
+```bash
+sudo nano /etc/hosts
+```
+
+Tambahkan:
+
+```text
+172.16.141.129 aliusman.com www.aliusman.com ns1.aliusman.com
+```
+
+Flush DNS:
+
+```bash
+sudo resolvectl flush-caches
+```
+
+Test:
+
+```bash
+ping aliusman.com
+curl -k https://aliusman.com
+```
+
+---
+
+# 18. Setup DNS Client di Windows Host
+
+Bagian ini dilakukan di **Windows host/client**, bukan di Ubuntu Server VM.
+
+---
+
+## Opsi A — Windows via GUI
+
+1. Buka **Control Panel**.
+2. Masuk ke **Network and Internet**.
+3. Pilih **Network and Sharing Center**.
+4. Klik **Change adapter settings**.
+5. Klik kanan adapter yang digunakan, misalnya:
+
+```text
+Ethernet
+Wi-Fi
+VMware Network Adapter VMnet1
+VMware Network Adapter VMnet8
+```
+
+6. Pilih **Properties**.
+7. Pilih **Internet Protocol Version 4 (TCP/IPv4)**.
+8. Klik **Properties**.
+9. Pilih **Use the following DNS server addresses**.
+10. Isi:
+
+```text
+Preferred DNS server : 172.16.141.129
+Alternate DNS server : 8.8.8.8
+```
+
+11. Klik **OK**.
+
+Flush DNS:
+
+```cmd
+ipconfig /flushdns
+```
+
+Test:
+
+```cmd
+nslookup aliusman.com
+ping aliusman.com
+curl.exe -k https://aliusman.com
+```
+
+Buka browser:
+
+```text
+https://aliusman.com
+```
+
+Karena SSL self-signed, browser akan menampilkan warning. Pilih:
+
+```text
+Advanced > Proceed to aliusman.com
+```
+
+---
+
+## Opsi B — Windows via PowerShell Administrator
+
+Buka PowerShell sebagai Administrator.
+
+Cek adapter:
+
+```powershell
+Get-NetAdapter
+```
+
+Contoh adapter:
+
+```text
+Ethernet
+Wi-Fi
+VMware Network Adapter VMnet1
+VMware Network Adapter VMnet8
+```
+
+Set DNS:
+
+```powershell
+Set-DnsClientServerAddress -InterfaceAlias "Ethernet" -ServerAddresses 172.16.141.129
+```
+
+Jika pakai VMware Host-Only, bisa gunakan adapter VMnet1:
+
+```powershell
+Set-DnsClientServerAddress -InterfaceAlias "VMware Network Adapter VMnet1" -ServerAddresses 172.16.141.129
+```
+
+Jika pakai VMware NAT, bisa gunakan adapter VMnet8:
+
+```powershell
+Set-DnsClientServerAddress -InterfaceAlias "VMware Network Adapter VMnet8" -ServerAddresses 172.16.141.129
+```
+
+Flush DNS:
+
+```powershell
+Clear-DnsClientCache
+```
+
+Test:
+
+```powershell
+nslookup aliusman.com
+ping aliusman.com
+curl.exe -k https://aliusman.com
+```
+
+Reset DNS kembali otomatis:
+
+```powershell
+Set-DnsClientServerAddress -InterfaceAlias "Ethernet" -ResetServerAddresses
+```
+
+---
+
+## Opsi C — Windows via Hosts File
+
+Jika tidak ingin mengubah DNS adapter, bisa pakai hosts file.
+
+Buka Notepad sebagai Administrator, lalu buka file:
+
+```text
+C:\Windows\System32\drivers\etc\hosts
+```
+
+Tambahkan:
+
+```text
+172.16.141.129 aliusman.com www.aliusman.com ns1.aliusman.com
+```
+
+Simpan, lalu flush DNS:
+
+```cmd
+ipconfig /flushdns
+```
+
+Test:
+
+```cmd
+ping aliusman.com
+curl.exe -k https://aliusman.com
+```
+
+---
+
+# 19. Import Self-Signed Certificate ke Linux Client agar Tidak Warning
+
+Opsional. Jika ingin Linux client percaya certificate self-signed:
+
+Copy certificate dari server:
+
+```bash
+scp ghroot67@172.16.141.129:/etc/ssl/certs/aliusman.com-selfsigned.crt .
+```
+
+Install ke trust store Debian/Ubuntu client:
+
+```bash
+sudo cp aliusman.com-selfsigned.crt /usr/local/share/ca-certificates/aliusman.com.crt
+sudo update-ca-certificates
+```
+
+Test tanpa `-k`:
+
+```bash
+curl https://aliusman.com
+```
+
+Untuk Arch Linux client:
+
+```bash
+sudo trust anchor --store aliusman.com-selfsigned.crt
+```
+
+Test:
+
+```bash
+curl https://aliusman.com
+```
+
+---
+
+# 20. Import Self-Signed Certificate ke Windows Client agar Tidak Warning
+
+Opsional. Jika ingin Windows/Browser percaya certificate self-signed:
+
+1. Copy file certificate dari server:
+
+```text
+/etc/ssl/certs/aliusman.com-selfsigned.crt
+```
+
+2. Pindahkan ke Windows.
+3. Rename jika perlu menjadi:
+
+```text
+aliusman.com-selfsigned.crt
+```
+
+4. Double click certificate.
+5. Klik **Install Certificate**.
+6. Pilih **Local Machine**.
+7. Pilih **Place all certificates in the following store**.
+8. Pilih:
+
+```text
+Trusted Root Certification Authorities
+```
+
+9. Klik **Next > Finish**.
+10. Restart browser.
+
+Test:
+
+```cmd
+curl.exe https://aliusman.com
+```
+
+---
+
+# 21. Final Checklist Server
+
+Jalankan di Ubuntu Server VM:
+
+```bash
+ip a
 ip route
-
-# Layanan dan port
-sudo systemctl --no-pager --full status apache2
-sudo ss -lntp | grep -E ':80|:443'
-
-# Konfigurasi Apache
+sudo systemctl status apache2 --no-pager
+sudo systemctl status bind9 --no-pager
 sudo apache2ctl configtest
-sudo apache2ctl -S
-
-# DNS publik
-dig +short example.com @1.1.1.1
-dig +short www.example.com @1.1.1.1
-
-# HTTP dan HTTPS
-curl -IL http://example.com
-curl -IL https://example.com
-
-# Log jika terjadi kegagalan
-sudo tail -n 100 /var/log/apache2/example.com-error.log
-sudo journalctl -u apache2 -n 100 --no-pager
+sudo named-checkconf
+sudo named-checkzone aliusman.com /etc/bind/zones/db.aliusman.com
+sudo named-checkzone 141.16.172.in-addr.arpa /etc/bind/zones/db.172.16.141
+dig @172.16.141.129 aliusman.com
+curl -I http://aliusman.com
+curl -k -I https://aliusman.com
 ```
 
-Jika BIND9 digunakan:
+Expected:
+
+```text
+Apache config : Syntax OK
+BIND zone     : OK
+DNS result    : 172.16.141.129
+HTTP result   : 301 Moved Permanently
+HTTPS result  : 200 OK
+```
+
+---
+
+# 22. Troubleshooting
+
+## Apache gagal start
+
+```bash
+sudo apache2ctl configtest
+sudo journalctl -u apache2 -xe --no-pager
+```
+
+Jika error:
+
+```text
+SSLCertificateFile does not exist or is empty
+```
+
+Cek file:
+
+```bash
+sudo ls -lah /etc/ssl/certs/aliusman.com-selfsigned.crt
+sudo ls -lah /etc/ssl/private/aliusman.com-selfsigned.key
+```
+
+Jika tidak ada, buat ulang certificate pada bagian SSL.
+
+---
+
+## Error 403 Forbidden
+
+Cek isi webroot:
+
+```bash
+ls -la /var/www/html/aliusman.com
+```
+
+Pastikan ada:
+
+```text
+index.html
+```
+
+Perbaiki permission:
+
+```bash
+sudo chown -R www-data:www-data /var/www/html/aliusman.com
+sudo find /var/www/html/aliusman.com -type d -exec chmod 755 {} \;
+sudo find /var/www/html/aliusman.com -type f -exec chmod 644 {} \;
+sudo systemctl restart apache2
+```
+
+---
+
+## Domain masih mengarah ke IP Docker lama
+
+Di Linux client:
+
+```bash
+cat /etc/hosts
+sudo resolvectl flush-caches
+```
+
+Hapus entry lama seperti:
+
+```text
+10.15.20.10 aliusman.com
+```
+
+Di Windows:
+
+```cmd
+ipconfig /flushdns
+notepad C:\Windows\System32\drivers\etc\hosts
+```
+
+Hapus entry lama seperti:
+
+```text
+10.15.20.10 aliusman.com
+```
+
+Test ulang:
+
+```cmd
+nslookup aliusman.com
+ping aliusman.com
+```
+
+---
+
+## Client tidak bisa akses server VM
+
+Cek dari client:
+
+```bash
+ping 172.16.141.129
+```
+
+Jika gagal:
+
+1. Pastikan VMware Network Adapter sudah benar: Bridged atau Host-Only.
+2. Pastikan IP server satu subnet dengan client.
+3. Cek firewall server:
+
+```bash
+sudo ufw status
+```
+
+4. Cek Apache listen port:
+
+```bash
+sudo ss -tulpn | grep -E ':80|:443'
+```
+
+5. Cek DNS listen port:
+
+```bash
+sudo ss -tulpn | grep ':53'
+```
+
+---
+
+## DNS tidak resolve
+
+Test langsung ke DNS server:
+
+```bash
+dig @172.16.141.129 aliusman.com
+```
+
+Jika berhasil tetapi `dig aliusman.com` gagal, berarti DNS client belum diarahkan ke `172.16.141.129`.
+
+Jika gagal semua, cek BIND9:
 
 ```bash
 sudo named-checkconf
-sudo named-checkzone lab.example.com /etc/bind/db.lab.example.com
-sudo ss -lntup | grep ':53'
-sudo journalctl -u bind9 -n 100 --no-pager
+sudo named-checkzone aliusman.com /etc/bind/zones/db.aliusman.com
+sudo journalctl -u bind9 -xe --no-pager
 ```
 
-Checklist keberhasilan:
+---
 
-- [ ] Adapter VMware terhubung dan mode jaringannya sesuai kebutuhan.
-- [ ] Host dapat mencapai port `80` VM melalui alamat IP VM.
-- [ ] Server selalu memperoleh IP LAN yang sama.
-- [ ] Apache aktif dan VirtualHost menunjukkan document root yang benar.
-- [ ] Record `A` domain publik mengarah ke IP publik yang benar.
-- [ ] Port TCP `80` dan `443` diteruskan dan diizinkan firewall.
-- [ ] Domain dapat dibuka dari jaringan di luar LAN.
-- [ ] HTTP mengalihkan ke HTTPS.
-- [ ] Sertifikat memuat domain utama dan `www`.
-- [ ] `certbot renew --dry-run` berhasil.
-- [ ] DNS lokal, jika digunakan, hanya menerima kueri/rekursi dari jaringan tepercaya.
+## HTTPS warning di browser
 
-## 10. Referensi resmi
+Itu normal karena menggunakan self-signed certificate.
 
-- [Ubuntu Server: Install Apache2](https://documentation.ubuntu.com/server/how-to/web-services/install-apache2/)
-- [Ubuntu Server: Configure Apache2 settings](https://documentation.ubuntu.com/server/how-to/web-services/configure-apache2-settings/)
-- [Ubuntu Server: Configuring networks dengan Netplan](https://documentation.ubuntu.com/server/explanation/networking/configuring-networks/)
-- [Ubuntu Server: Instalasi dan konfigurasi DNS/BIND9](https://documentation.ubuntu.com/server/how-to/networking/install-dns/)
-- [Certbot: Instruksi Apache di Linux](https://certbot.eff.org/instructions?ws=apache&os=snap)
-- [Microsoft Learn: New-NetIPAddress](https://learn.microsoft.com/powershell/module/nettcpip/new-netipaddress)
-- [Microsoft Learn: Set-DnsClientServerAddress](https://learn.microsoft.com/powershell/module/dnsclient/set-dnsclientserveraddress)
-- [Broadcom KB: Troubleshooting network connection failures pada VMware](https://knowledge.broadcom.com/external/article/307964/)
-- [Broadcom KB: Memilih adapter fisik untuk Bridged/VMnet0](https://knowledge.broadcom.com/external/article/311353/)
+Solusi:
+
+1. Klik **Advanced > Proceed**; atau
+2. Import certificate ke Trusted Root CA pada Linux/Windows client.
+
+---
+
+# 23. Quick Command Summary
+
+```bash
+sudo apt update && sudo apt upgrade -y
+sudo apt install apache2 bind9 bind9utils dnsutils openssl ufw -y
+sudo mkdir -p /var/www/html/aliusman.com
+sudo tee /var/www/html/aliusman.com/index.html >/dev/null <<'HTML'
+<!DOCTYPE html>
+<html>
+<head><title>aliusman.com</title></head>
+<body><h1>aliusman.com berhasil berjalan</h1></body>
+</html>
+HTML
+sudo chown -R www-data:www-data /var/www/html/aliusman.com
+sudo find /var/www/html/aliusman.com -type d -exec chmod 755 {} \;
+sudo find /var/www/html/aliusman.com -type f -exec chmod 644 {} \;
+sudo openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+-keyout /etc/ssl/private/aliusman.com-selfsigned.key \
+-out /etc/ssl/certs/aliusman.com-selfsigned.crt \
+-subj "/C=ID/ST=Jakarta/L=Jakarta/O=Aliusman Lab/OU=IT/CN=aliusman.com" \
+-addext "subjectAltName=DNS:aliusman.com,DNS:www.aliusman.com,DNS:ns1.aliusman.com,IP:172.16.141.129"
+sudo a2enmod ssl rewrite headers
+sudo a2dissite 000-default.conf
+sudo a2ensite aliusman.com.conf
+sudo apache2ctl configtest
+sudo systemctl restart apache2
+sudo named-checkconf
+sudo systemctl restart bind9
+```
